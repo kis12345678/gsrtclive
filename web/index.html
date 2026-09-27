@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GSRTC Live</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>GSRTC Live</h1>
+    <nav role="tablist">
+      <button role="tab" data-tab="track" aria-selected="true">Track bus</button>
+      <button role="tab" data-tab="nearby" aria-selected="false">Nearby stations</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="panel">
+      <div data-panel="track">
+        <form id="plate-form" autocomplete="off">
+          <label for="plate">Bus number</label>
+          <div class="row">
+            <input id="plate" name="plate" placeholder="GJ18Z1234" required minlength="4" maxlength="14">
+            <button type="submit">Track</button>
+          </div>
+          <ul id="plate-suggest" class="list"></ul>
+        </form>
+        <div id="vehicle-info"></div>
+      </div>
+
+      <div data-panel="nearby" hidden>
+        <button id="locate">Use my location</button>
+        <ul id="stations" class="list"></ul>
+      </div>
+
+      <p id="status" role="status"></p>
+    </section>
+
+    <div id="map"></div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
