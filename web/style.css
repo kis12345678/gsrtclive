@@ -1,0 +1,121 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #16181d;
+  --muted: #5d6470;
+  --border: #d9dde3;
+  --accent: #c8102e;
+  --accent-text: #ffffff;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121418;
+    --surface: #1b1e24;
+    --text: #e8eaee;
+    --muted: #9aa1ad;
+    --border: #2d323b;
+    --accent: #ff4d5e;
+    --accent-text: #121418;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+h1 { font-size: 18px; margin: 0; }
+
+nav { display: flex; gap: 4px; }
+
+nav button {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+
+nav button[aria-selected="true"] {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+main { flex: 1; display: flex; min-height: 0; }
+
+#panel {
+  width: 340px;
+  padding: 16px;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+#map { flex: 1; min-height: 300px; }
+
+label { display: block; font-weight: 600; margin-bottom: 6px; }
+
+.row { display: flex; gap: 8px; }
+
+input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+button {
+  padding: 8px 12px;
+  font: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.list { list-style: none; padding: 0; margin: 12px 0; }
+
+.list li {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.list li:hover { background: var(--bg); }
+
+.list small, #status { color: var(--muted); }
+
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0; }
+dt { color: var(--muted); }
+dd { margin: 0; word-break: break-word; }
+
+@media (max-width: 720px) {
+  main { flex-direction: column; }
+  #panel { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45vh; }
+}
