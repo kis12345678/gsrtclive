@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Collector, distToSegmentM, haversineM, istDay, normPlate } from '../server/collector.js';
+import { Collector, distToSegmentM, haversineM, istDay, normPlate, parseWindows } from '../server/collector.js';
 import { UpstreamError } from '../server/upstream.js';
 import { ClientLimiter, createHandler } from '../server/app.js';
 
@@ -306,4 +306,91 @@ test('fixed mode: fails loudly when no plate is valid, and the cap still applies
   assert.deepEqual([...capped.roster.keys()], ['GJ18Z1001', 'GJ18Z1002']); // first two, in the order given
   assert.equal(mk([]).status().mode, 'timetable');
   await rm(dataDir, { recursive: true, force: true });
+});
+
+// IST wall-clock time on 2026-09-29 as a timestamp (07:30 IST = 02:00Z = T0).
+const ist = (h, m = 0) => Date.parse('2026-09-29T00:00:00Z') + (h * 60 + m) * 60_000 - 330 * 60_000;
+
+test('parseWindows: ranges, wrap-around and bad input', () => {
+  assert.deepEqual(parseWindows(''), []);
+  assert.deepEqual(parseWindows(' 06:00-10:30 , 6:00 - 20:30 '), [
+    { start: 360, end: 630, label: '06:00-10:30' },
+    { start: 360, end: 1230, label: '06:00-20:30' },
+  ]);
+  assert.equal(parseWindows('22:00-02:00')[0].end, 120);
+  assert.equal(parseWindows('00:00-24:00')[0].end, 1440);
+  for (const bad of ['6-10', '10:00', '25:00-26:00', '10:60-11:00', '10:00-10:00', '24:00-01:00', 'morning']) {
+    assert.throws(() => parseWindows(bad), /ACTIVE_WINDOWS/, bad);
+  }
+});
+
+test('active hours: inside/outside, wrap past midnight, next start', async () => {
+  const { c, cleanup } = await setup(fake(), { windows: '06:00-10:30, 16:00-20:30' });
+  for (const [h, m, want] of [[6, 0, true], [10, 29, true], [10, 30, false], [12, 0, false], [16, 0, true], [20, 30, false], [3, 0, false]]) {
+    assert.equal(c.isActive(ist(h, m)), want, `${h}:${m}`);
+  }
+  assert.equal(c.nextWindowStart(ist(12, 0)), '16:00');
+  assert.equal(c.nextWindowStart(ist(21, 0)), '06:00'); // wraps to tomorrow morning
+  assert.equal(c.nextWindowStart(ist(3, 0)), '06:00');
+  assert.equal(c.nextWindowStart(ist(8, 0)), null); // already active
+  await cleanup();
+
+  const night = await setup(fake(), { windows: '22:00-02:00' });
+  for (const [h, want] of [[23, true], [1, true], [2, false], [12, false]]) assert.equal(night.c.isActive(ist(h)), want, `night ${h}`);
+  await night.cleanup();
+
+  const always = await setup(fake());
+  assert.equal(always.c.isActive(ist(3)), true);
+  assert.equal(always.c.nextWindowStart(ist(3)), null);
+  await always.cleanup();
+});
+
+test('outside the active hours nothing is sent to the upstream', async () => {
+  const up = fake();
+  up.vehicles.GJ18Z1111 = [23.0, 69.7];
+  const { c, advance, cleanup } = await setup(up, { plates: ['GJ18Z1111'], windows: '16:00-20:30' }); // T0 = 07:30 IST
+  await c.tick();
+  await c.tick();
+  assert.equal(up.calls.length, 0);
+  assert.equal(c.stats.pausedTicks, 2);
+  const st = c.status();
+  assert.deepEqual([st.active, st.windows, st.nextWindowStart], [false, '16:00-20:30', '16:00']);
+  assert.equal(c.snapshot().active, false);
+
+  advance(9 * 3600_000); // 16:30 IST
+  await c.tick();
+  assert.equal(up.calls.length, 1);
+  assert.equal(c.status().active, true);
+  await cleanup();
+});
+
+test('a reopened window is not compared with hours-old positions', async () => {
+  const up = fake();
+  up.vehicles.GJ18Z1111 = [23.0, 69.7];
+  const { c, advance, dataDir, cleanup } = await setup(up, { plates: ['GJ18Z1111'], windows: '06:00-10:30' }); // T0 = 07:30 IST
+  await c.tick();
+  advance(30_000);
+  up.vehicles.GJ18Z1111 = [22.99, 69.7];
+  await c.tick();
+  assert.equal(c.snapshot().buses[0].moving, true);
+
+  advance(3.5 * 3600_000); // 11:00 IST: window closed
+  await c.tick();
+  const paused = c.snapshot();
+  assert.equal(paused.active, false);
+  assert.equal(paused.moving, 0);
+  assert.equal(paused.buses[0].moving, false); // last position only, not "moving"
+  assert.equal(paused.buses[0].speedKmh, null);
+
+  advance(20.5 * 3600_000 - 30_000); // next morning, 07:29:30 IST
+  up.vehicles.GJ18Z1111 = [23.2, 69.7]; // 20+ km away from where it was last seen
+  await c.tick();
+  const bus = c.snapshot().buses[0];
+  assert.equal(bus.moving, false); // would be a ~700 km/h "speed" if compared with yesterday
+  assert.equal(bus.speedKmh, null);
+  assert.equal(c.buses.get('GJ18Z1111').nextPollAt, c.now() + 30_000); // look again soon
+  await c.flush();
+  const rows = (await readFile(join(dataDir, 'positions-2026-09-30.jsonl'), 'utf8')).trim().split('\n');
+  assert.equal(rows.length, 1); // the fresh first sample of the new day is logged
+  await cleanup();
 });

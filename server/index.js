@@ -34,7 +34,8 @@ server.listen(config.port, () => {
   if (collector) {
     const { routeA, routeB } = config.collector;
     const which = config.collector.plates.length ? `${config.collector.plates.length} fixed buses (TRACK_PLATES)` : 'buses from the timetable';
-    console.log(`collector on: ${routeA.name} <-> ${routeB.name}, ${which}, history in ${config.collector.dataDir}/`);
+    const hours = config.collector.windows ? `active ${config.collector.windows} IST` : 'active around the clock';
+    console.log(`collector on: ${routeA.name} <-> ${routeB.name}, ${which}, ${hours}, history in ${config.collector.dataDir}/`);
   } else {
     console.log('collector off (set COLLECTOR=on for 24x7 route tracking, see README)');
   }

@@ -27,6 +27,28 @@ export function istDay(ms) {
   return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+// "06:00-10:30,16:00-20:30" (IST) -> [{ start, end, label }] in minutes of the day.
+// A range whose end is before its start wraps past midnight ("22:00-02:00").
+export function parseWindows(spec) {
+  return String(spec ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const m = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(part);
+      if (!m) throw new Error(`ACTIVE_WINDOWS: "${part}" is not HH:MM-HH:MM`);
+      const [sh, sm, eh, em] = m.slice(1).map(Number);
+      const start = sh * 60 + sm;
+      const end = eh * 60 + em;
+      if (sm > 59 || em > 59 || start >= 1440 || end > 1440 || start === end) {
+        throw new Error(`ACTIVE_WINDOWS: "${part}" is not a valid time range`);
+      }
+      return { start, end, label: `${hhmm(start)}-${hhmm(end)}` };
+    });
+}
+
 export function haversineM(lat1, lng1, lat2, lng2) {
   const rad = Math.PI / 180;
   const a =
@@ -54,6 +76,7 @@ export class Collector {
     routeA,
     routeB,
     plates = [],
+    windows = '',
     dataDir = 'data',
     pollActiveMs = 30_000,
     pollIdleMs = 5 * 60_000,
@@ -81,6 +104,10 @@ export class Collector {
     if (wanted.length > maxPlates) log.warn?.(`TRACK_PLATES: only the first ${maxPlates} of ${wanted.length} buses are tracked (MAX_PLATES)`);
     this.fixed = wanted.slice(0, maxPlates);
 
+    // Active hours (IST). Outside them nothing is sent to the upstream at all.
+    this.windows = parseWindows(windows);
+    this.wasActive = false;
+
     this.roster = new Map(); // plate -> last time the timetable listed it
     this.buses = new Map(); // plate -> live state
     this.rosterAt = 0;
@@ -89,7 +116,7 @@ export class Collector {
     this.writeChain = Promise.resolve();
     this.writeFailed = false;
     this.stats = {
-      startedAt: now(), polls: 0, errors: 0, skippedBackoff: 0, rosterRefreshes: 0,
+      startedAt: now(), polls: 0, errors: 0, skippedBackoff: 0, pausedTicks: 0, rosterRefreshes: 0,
       lastPollAt: 0, lastError: '', historyWrites: 0,
     };
   }
@@ -115,12 +142,21 @@ export class Collector {
     if (this.busy) return;
     this.busy = true;
     try {
+      const t = this.now();
+      if (this.windows.length) {
+        const active = this.isActive(t);
+        if (active && !this.wasActive) this.#openWindow();
+        this.wasActive = active;
+        if (!active) {
+          this.stats.pausedTicks++;
+          return;
+        }
+      }
       const h = this.upstream.health();
       if (h.pausedForMs > 0 || h.queued > 5) {
         this.stats.skippedBackoff++;
         return;
       }
-      const t = this.now();
       if (t - this.rosterAt >= this.rosterRefreshMs) await this.refreshRoster();
       const due = [...this.buses.values()]
         .filter((b) => b.nextPollAt <= t)
@@ -130,6 +166,33 @@ export class Collector {
     } finally {
       this.busy = false;
     }
+  }
+
+  // ---- active hours ----
+
+  isActive(t = this.now()) {
+    if (!this.windows.length) return true;
+    const m = Math.floor(((t + IST_OFFSET_MS) % DAY_MS) / 60_000);
+    return this.windows.some((w) => (w.end > w.start ? m >= w.start && m < w.end : m >= w.start || m < w.end));
+  }
+
+  // When the next window starts (IST, HH:MM), or null if always active / currently active.
+  nextWindowStart(t = this.now()) {
+    if (!this.windows.length || this.isActive(t)) return null;
+    const m = Math.floor(((t + IST_OFFSET_MS) % DAY_MS) / 60_000);
+    const wait = (w) => (w.start - m + 1440) % 1440;
+    return hhmm(this.windows.reduce((best, w) => (wait(w) < wait(best) ? w : best)).start);
+  }
+
+  // A window just opened: positions from hours ago are stale, so the first sample of each
+  // bus must not be compared with them (it would look like a huge speed), and the
+  // timetable roster is refreshed.
+  #openWindow() {
+    for (const bus of this.buses.values()) {
+      bus.stale = true;
+      bus.nextPollAt = 0;
+    }
+    this.rosterAt = 0;
   }
 
   // ---- roster ----
@@ -206,7 +269,8 @@ export class Collector {
       return;
     }
 
-    const prev = bus.hasData ? { lat: bus.lat, lng: bus.lng, at: bus.seenAt } : null;
+    const fresh = bus.hasData && !bus.stale;
+    const prev = fresh ? { lat: bus.lat, lng: bus.lng, at: bus.seenAt } : null;
     const movedM = prev ? haversineM(prev.lat, prev.lng, lat, lng) : 0;
     const dtS = prev ? (t - prev.at) / 1000 : 0;
     const speedKmh = prev && dtS >= 5 ? (movedM / dtS) * 3.6 : null;
@@ -223,9 +287,9 @@ export class Collector {
       if (Math.abs(before - distMundraM) >= 15) towards = distMundraM < before ? this.routeB.name : this.routeA.name;
     }
 
-    const first = !bus.hasData;
+    const first = !fresh;
     Object.assign(bus, {
-      hasData: true, lat, lng, seenAt: t, moving, speedKmh: speedKmh === null ? null : Math.round(speedKmh * 10) / 10,
+      hasData: true, stale: false, lat, lng, seenAt: t, moving, speedKmh: speedKmh === null ? null : Math.round(speedKmh * 10) / 10,
       distBhujM, distMundraM, inCorridor, towards,
       label: v.RouteName || '', lastStop: v.LastBusStation || '', nextStop: v.NextLocation || '',
       location: v.CurrentLocationName || '', tripId: v.TripId ? String(v.TripId) : '',
@@ -252,7 +316,11 @@ export class Collector {
 
   snapshot({ corridorOnly = false, movingOnly = false } = {}) {
     const t = this.now();
-    const all = [...this.buses.values()].filter((b) => b.hasData);
+    const active = this.isActive(t);
+    // Outside the active hours the last positions are only a memory: nothing is "moving".
+    const all = [...this.buses.values()]
+      .filter((b) => b.hasData)
+      .map((b) => (active ? b : { ...b, moving: false, speedKmh: null, towards: null }));
     const buses = all
       .filter((b) => (!corridorOnly || b.inCorridor) && (!movingOnly || b.moving))
       .map((b) => ({
@@ -276,6 +344,9 @@ export class Collector {
       .sort((a, b) => Number(b.moving) - Number(a.moving) || a.distMundraKm - b.distMundraKm);
     return {
       updatedAt: t,
+      active,
+      windows: this.windows.map((w) => w.label).join(', '),
+      nextWindowStart: this.nextWindowStart(t),
       tracked: this.buses.size,
       withData: all.length,
       moving: all.filter((b) => b.moving).length,
@@ -290,6 +361,9 @@ export class Collector {
       running: Boolean(this.timer),
       route: `${this.routeA.name} <-> ${this.routeB.name}`,
       mode: this.fixed.length ? 'fixed' : 'timetable',
+      active: this.isActive(t),
+      windows: this.windows.map((w) => w.label).join(', '),
+      nextWindowStart: this.nextWindowStart(t),
       uptimeSec: Math.round((t - this.stats.startedAt) / 1000),
       roster: this.roster.size,
       rosterAgeSec: this.rosterAt ? Math.round((t - this.rosterAt) / 1000) : null,
