@@ -30,6 +30,7 @@ export function loadConfig() {
     upstreamRps: num('UPSTREAM_RPS', 2),
     upstreamBurst: num('UPSTREAM_BURST', 4),
     clientRpm: num('CLIENT_RPM', 60),
+    trustProxy: ['on', '1', 'true', 'yes'].includes(str('TRUST_PROXY', 'off').toLowerCase()),
     collector: {
       enabled: ['on', '1', 'true', 'yes'].includes(str('COLLECTOR', 'off').toLowerCase()),
       routeA: route('ROUTE_A', { id: '594', name: 'Bhuj', lat: 23.25017, lng: 69.6707 }),

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { ClientLimiter, createHandler } from '../server/app.js';
+import { ClientLimiter, clientIp, createHandler } from '../server/app.js';
 
 function fakeUpstream() {
   const calls = [];
@@ -145,5 +145,30 @@ test('trip, timetable, depot and nearby/buses pass their extra params', async ()
 
     await fetch(`${base}/api/nearby/buses?lat=23.25017&lng=69.6707&radius=500`);
     assert.deepEqual(upstream.calls[3].query, { lat: '23.250', lng: '69.671', radius: 50 });
+  });
+});
+
+test('client ip: proxy headers are ignored unless trustProxy is set', () => {
+  const req = (headers) => ({ headers, socket: { remoteAddress: '10.0.0.1' } });
+  assert.equal(clientIp(req({ 'x-forwarded-for': '1.1.1.1' })), '10.0.0.1');
+  assert.equal(clientIp(req({ 'cf-connecting-ip': '2.2.2.2' })), '10.0.0.1');
+  assert.equal(clientIp(req({ 'cf-connecting-ip': '2.2.2.2' }), true), '2.2.2.2');
+  // One trusted hop appends the address it saw: a spoofed first entry must not win.
+  assert.equal(clientIp(req({ 'x-forwarded-for': '9.9.9.9, 3.3.3.3' }), true), '3.3.3.3');
+  assert.equal(clientIp(req({}), true), '10.0.0.1');
+  assert.equal(clientIp(req({ 'x-forwarded-for': 'a'.repeat(500) }), true).length, 64);
+});
+
+test('behind a trusted proxy each real client gets its own rate-limit bucket', async () => {
+  const mk = (trustProxy) => createHandler({ upstream: fakeUpstream(), limiter: new ClientLimiter(2), trustProxy });
+  const hit = (base, ip) => fetch(`${base}/api/servicetypes`, { headers: { 'x-forwarded-for': ip } }).then((r) => r.status);
+
+  await withServer(mk(true), async (base) => {
+    assert.deepEqual([await hit(base, '1.1.1.1'), await hit(base, '1.1.1.1'), await hit(base, '1.1.1.1')], [200, 200, 429]);
+    assert.equal(await hit(base, '2.2.2.2'), 200); // a different visitor is unaffected
+  });
+  await withServer(mk(false), async (base) => {
+    // Not trusted: the header can't be used to dodge the limit.
+    assert.deepEqual([await hit(base, '1.1.1.1'), await hit(base, '2.2.2.2'), await hit(base, '3.3.3.3')], [200, 200, 429]);
   });
 });

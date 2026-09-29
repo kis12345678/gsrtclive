@@ -1,0 +1,22 @@
+# Run the tracker 24x7:
+#   cp .env.example .env     # then edit it (COLLECTOR=on to record the route around the clock)
+#   docker compose up -d --build
+#   docker compose logs -f
+services:
+  gsrtclive:
+    build: .
+    container_name: gsrtclive
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # The container always listens on 8080; change the left side of `ports` to move it.
+      PORT: "8080"
+      DATA_DIR: /app/data
+    ports:
+      - "8080:8080"
+    volumes:
+      - gsrtc-data:/app/data
+    stop_grace_period: 15s
+
+volumes:
+  gsrtc-data:

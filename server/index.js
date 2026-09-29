@@ -21,7 +21,13 @@ const upstream = new Upstream({
 
 const collector = config.collector.enabled ? new Collector({ upstream, ...config.collector }) : null;
 
-const server = createServer(createHandler({ upstream, limiter: new ClientLimiter(config.clientRpm), collector }));
+const handler = createHandler({
+  upstream,
+  limiter: new ClientLimiter(config.clientRpm),
+  collector,
+  trustProxy: config.trustProxy,
+});
+const server = createServer(handler);
 
 server.listen(config.port, () => {
   console.log(`gsrtclive listening on http://localhost:${config.port} (upstream ${config.upstreamBase})`);
