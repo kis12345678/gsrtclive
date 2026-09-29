@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+.env
+data
+test
+docs
+deploy
+*.md
+*.patch
+*.zip

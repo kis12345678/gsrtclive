@@ -26,6 +26,29 @@ npm start              # http://localhost:8080
 npm test
 ```
 
+## Deploy (24x7)
+
+**Docker Compose** (recommended: home server or any small VPS):
+
+```bash
+cp .env.example .env      # edit: COLLECTOR=on to record the route, TRUST_PROXY=on behind a tunnel/proxy
+docker compose up -d --build
+docker compose logs -f          # "collector on: Bhuj <-> Mundra ..."
+curl localhost:8080/api/health  # server + collector status
+```
+
+History lives in the `gsrtc-data` volume and survives rebuilds. Back it up with
+`docker compose cp gsrtclive:/app/data ./data-backup`. Update with `git pull && docker compose up -d --build`.
+
+**systemd** without Docker: `deploy/gsrtclive.service`.
+
+To reach it from outside your network, put a reverse proxy or a Cloudflare Tunnel in
+front (HTTPS) and set `TRUST_PROXY=on`.
+
+**Not Vercel.** The collector is a long-running process that writes to disk and keeps
+rate-limit/backoff state in memory; serverless functions keep neither, so the Mundra
+tab would never have data.
+
 ## 24x7 Mundra route tracking
 
 With `COLLECTOR=on` the server keeps watching the Bhuj <-> Mundra route around the

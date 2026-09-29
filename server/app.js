@@ -53,7 +53,22 @@ function sendJson(res, status, body, extraHeaders = {}) {
   res.end(JSON.stringify(body));
 }
 
-export function createHandler({ upstream, limiter, collector = null }) {
+// Behind a reverse proxy or tunnel every request comes from the proxy's address, which
+// would put all visitors in one rate-limit bucket. With trustProxy the real client is
+// read from the proxy's headers; without it those headers are ignored (they are
+// client-controlled and would let anyone dodge the limiter).
+export function clientIp(req, trustProxy = false) {
+  if (trustProxy) {
+    const cf = req.headers['cf-connecting-ip'];
+    if (cf) return String(cf).trim().slice(0, 64);
+    const xff = req.headers['x-forwarded-for'];
+    // One trusted proxy hop: the proxy appends the address it saw, so take the last entry.
+    if (xff) return String(xff).split(',').at(-1).trim().slice(0, 64);
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+export function createHandler({ upstream, limiter, collector = null, trustProxy = false }) {
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
 
@@ -68,7 +83,7 @@ export function createHandler({ upstream, limiter, collector = null }) {
         });
       }
 
-      const ip = req.socket.remoteAddress || 'unknown';
+      const ip = clientIp(req, trustProxy);
       const retryAfter = limiter.allow(ip);
       if (retryAfter) {
         return sendJson(res, 429, { error: 'Too many requests' }, { 'retry-after': String(retryAfter) });
