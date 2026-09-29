@@ -3,6 +3,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { matchRoute, RouteError } from './routes.js';
 import { UpstreamError } from './upstream.js';
+import { normPlate } from './collector.js';
 
 const WEB_ROOT = fileURLToPath(new URL('../web/', import.meta.url));
 
@@ -52,7 +53,7 @@ function sendJson(res, status, body, extraHeaders = {}) {
   res.end(JSON.stringify(body));
 }
 
-export function createHandler({ upstream, limiter }) {
+export function createHandler({ upstream, limiter, collector = null }) {
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
 
@@ -60,13 +61,21 @@ export function createHandler({ upstream, limiter }) {
       if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
 
       if (url.pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, upstream: upstream.health() });
+        return sendJson(res, 200, {
+          ok: true,
+          upstream: upstream.health(),
+          ...(collector ? { collector: collector.status() } : {}),
+        });
       }
 
       const ip = req.socket.remoteAddress || 'unknown';
       const retryAfter = limiter.allow(ip);
       if (retryAfter) {
         return sendJson(res, 429, { error: 'Too many requests' }, { 'retry-after': String(retryAfter) });
+      }
+
+      if (collector && url.pathname.startsWith('/api/mundra/')) {
+        return handleMundra(collector, url, res);
       }
 
       const match = matchRoute(url.pathname);
@@ -91,6 +100,30 @@ export function createHandler({ upstream, limiter }) {
     }
     return serveStatic(url.pathname, res);
   };
+}
+
+// Served from the collector's memory/disk: no upstream call per request.
+async function handleMundra(collector, url, res) {
+  const q = url.searchParams;
+  try {
+    switch (url.pathname) {
+      case '/api/mundra/buses':
+        return sendJson(res, 200, collector.snapshot({ corridorOnly: q.get('corridor') === '1', movingOnly: q.get('moving') === '1' }));
+      case '/api/mundra/status':
+        return sendJson(res, 200, collector.status());
+      case '/api/mundra/history': {
+        const plate = normPlate(q.get('plate'));
+        if (!plate) return sendJson(res, 400, { error: 'Invalid plate' });
+        const hours = Math.min(Math.max(Number(q.get('hours')) || 6, 1), 72);
+        return sendJson(res, 200, { plate, hours, points: await collector.history(plate, hours) });
+      }
+      default:
+        return sendJson(res, 404, { error: 'Not found' });
+    }
+  } catch (err) {
+    console.error(err);
+    return sendJson(res, 500, { error: 'Internal error' });
+  }
 }
 
 async function serveStatic(pathname, res) {

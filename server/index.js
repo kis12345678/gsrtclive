@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { loadConfig } from './config.js';
 import { Upstream } from './upstream.js';
 import { ClientLimiter, createHandler } from './app.js';
+import { Collector } from './collector.js';
 
 try {
   process.loadEnvFile?.();
@@ -18,8 +19,31 @@ const upstream = new Upstream({
   burst: config.upstreamBurst,
 });
 
-const server = createServer(createHandler({ upstream, limiter: new ClientLimiter(config.clientRpm) }));
+const collector = config.collector.enabled ? new Collector({ upstream, ...config.collector }) : null;
+
+const server = createServer(createHandler({ upstream, limiter: new ClientLimiter(config.clientRpm), collector }));
 
 server.listen(config.port, () => {
   console.log(`gsrtclive listening on http://localhost:${config.port} (upstream ${config.upstreamBase})`);
+  if (collector) {
+    const { routeA, routeB } = config.collector;
+    console.log(`collector on: ${routeA.name} <-> ${routeB.name}, history in ${config.collector.dataDir}/`);
+  } else {
+    console.log('collector off (set COLLECTOR=on for 24x7 route tracking, see README)');
+  }
 });
+
+collector?.start().catch((err) => {
+  console.error('collector failed to start:', err.message);
+});
+
+// Let systemd/docker stop us cleanly so queued history lines reach the disk.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, async () => {
+    collector?.stop();
+    upstream.close();
+    server.close();
+    await collector?.flush();
+    process.exit(0);
+  });
+}

@@ -10,7 +10,13 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors',
 }).addTo(map);
 
-const layers = { stations: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map) };
+const layers = {
+  stations: L.layerGroup().addTo(map),
+  bus: L.layerGroup().addTo(map),
+  mundra: L.layerGroup().addTo(map),
+  trail: L.layerGroup().addTo(map),
+};
+const ROUTE_BOUNDS = [[22.75, 69.45], [23.4, 69.95]]; // Bhuj-Mundra corridor
 let pollTimer = null;
 
 function setStatus(text) {
@@ -20,7 +26,11 @@ function setStatus(text) {
 async function api(path) {
   const res = await fetch(path, { headers: { accept: 'application/json' } });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(body.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   return body;
 }
 
@@ -61,6 +71,8 @@ for (const tab of document.querySelectorAll('[role="tab"]')) {
     }
     for (const p of document.querySelectorAll('[data-panel]')) p.hidden = p.dataset.panel !== tab.dataset.tab;
     setStatus('');
+    if (tab.dataset.tab === 'mundra') startMundra();
+    else stopMundra();
   });
 }
 
@@ -126,7 +138,10 @@ async function track(plate) {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTimeout(pollTimer);
+  if (document.hidden) {
+    clearTimeout(pollTimer);
+    clearTimeout(mundraTimer);
+  } else if (mundraActive) tickMundra();
   else if (track.resume) track.resume();
 });
 
@@ -201,9 +216,118 @@ async function loadNearby(lat, lng) {
   }
 }
 
-// Deep link: ?plate=GJ18Z1234
+// ---- Mundra route (fed by the server's 24x7 collector) ----
+let mundraTimer = null;
+let mundraActive = false;
+let selectedPlate = null;
+let mundraSeq = 0;
+let lastMundra = null;
+
+function startMundra() {
+  if (mundraActive) return;
+  mundraActive = true;
+  clearTimeout(pollTimer); // stop single-bus polling from the Track tab
+  track.resume = null;
+  layers.bus.clearLayers();
+  layers.stations.clearLayers();
+  map.fitBounds(ROUTE_BOUNDS);
+  tickMundra();
+}
+
+function stopMundra() {
+  mundraActive = false;
+  clearTimeout(mundraTimer);
+  layers.mundra.clearLayers();
+  layers.trail.clearLayers();
+}
+
+async function tickMundra() {
+  clearTimeout(mundraTimer);
+  if (!mundraActive) return;
+  const seq = ++mundraSeq;
+  try {
+    const data = await api(`/api/mundra/buses${$('#corridor').checked ? '?corridor=1' : ''}`);
+    if (mundraActive && seq === mundraSeq) {
+      renderMundra(data);
+      setStatus(`Updated ${new Date().toLocaleTimeString()}`);
+    }
+  } catch (err) {
+    if (err.status === 404) {
+      // Server was started without the collector: nothing to poll.
+      $('#mundra-summary').textContent = 'Route tracking is off on this server (start it with COLLECTOR=on).';
+      $('#mundra-list').replaceChildren();
+      return;
+    }
+    setStatus(err.message);
+  }
+  if (mundraActive && !document.hidden) mundraTimer = setTimeout(tickMundra, POLL_MS);
+}
+
+$('#corridor').addEventListener('change', () => {
+  if (mundraActive) tickMundra();
+});
+
+const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`);
+
+function renderMundra(data) {
+  lastMundra = data;
+  const buses = data.buses || [];
+  $('#mundra-summary').textContent =
+    `${buses.length} shown · ${data.moving} moving · ${data.withData}/${data.tracked} bus positions known`;
+
+  layers.mundra.clearLayers();
+  for (const b of buses) {
+    L.circleMarker([b.lat, b.lng], {
+      radius: b.moving ? 9 : 6,
+      color: '#fff',
+      weight: 2,
+      fillColor: b.moving ? '#16a34a' : '#6b7280',
+      fillOpacity: 1,
+    })
+      .bindTooltip(`${b.plate}${b.moving ? ` · ${Math.round(b.speedKmh)} km/h` : ' · stopped'}`)
+      .on('click', () => selectBus(b))
+      .addTo(layers.mundra);
+  }
+
+  $('#mundra-list').replaceChildren(
+    ...buses.map((b) => {
+      const state = b.moving
+        ? `moving ~${Math.round(b.speedKmh)} km/h${b.towards ? ` → ${b.towards}` : ''}`
+        : `stopped${b.stillForMin >= 2 ? ` ${fmtMin(b.stillForMin)}` : ''}`;
+      const li = el(
+        'li',
+        { className: `bus ${b.moving ? 'moving' : 'stopped'}${b.plate === selectedPlate ? ' selected' : ''}` },
+        el('strong', { textContent: `${b.plate} · ${state}` }),
+        el('small', { textContent: `${b.distBhujKm} km from Bhuj · ${b.distMundraKm} km from Mundra` }),
+      );
+      li.addEventListener('click', () => selectBus(b));
+      return li;
+    }),
+  );
+}
+
+async function selectBus(b) {
+  selectedPlate = b.plate;
+  if (lastMundra) renderMundra(lastMundra); // highlight now, no network
+  map.setView([b.lat, b.lng], 12);
+  layers.trail.clearLayers();
+  try {
+    const { points } = await api(`/api/mundra/history?plate=${encodeURIComponent(b.plate)}&hours=6`);
+    if (selectedPlate !== b.plate) return;
+    const line = points.map((p) => [p.lat, p.lng]);
+    if (line.length > 1) L.polyline(line, { color: '#c8102e', weight: 4, opacity: 0.7 }).addTo(layers.trail);
+    setStatus(`${b.plate}: ${points.length} recorded positions in the last 6 h`);
+  } catch (err) {
+    setStatus(err.message);
+  }
+}
+
+// Deep link: ?plate=GJ18Z1234 opens the Track tab; otherwise start on the Mundra route.
 const initial = new URL(location.href).searchParams.get('plate');
 if (initial) {
+  document.querySelector('[data-tab="track"]').click();
   $('#plate').value = initial;
   track(normalizePlate(initial));
+} else {
+  startMundra();
 }
