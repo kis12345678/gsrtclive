@@ -51,11 +51,11 @@ tab would never have data.
 
 ## 24x7 Mundra route tracking
 
-With `COLLECTOR=on` the server keeps watching the Bhuj <-> Mundra route around the
-clock, whether or not anyone has the page open:
+With `COLLECTOR=on` the server keeps watching the Bhuj <-> Mundra route (around the
+clock, or only inside `ACTIVE_WINDOWS`), whether or not anyone has the page open:
 
 ```
-TRACK_PLATES (or the timetable, both directions) ──► bus roster ──► poll each bus (30 s moving / 5 min stopped)
+TRACK_PLATES (or the timetable, both directions) ──► bus roster ──► poll each bus (POLL_ACTIVE_MS moving / POLL_IDLE_MS stopped)
                                                   │
                           speed + direction worked out from consecutive positions
                                                   │
@@ -89,10 +89,22 @@ What the numbers mean, and don't:
   whatever the timetable lists each day. Either way an unlisted replacement bus is
   missed, so revisit the list now and then. To add a bus: edit `TRACK_PLATES` in
   `.env` and `docker compose up -d`.
-- Load on the upstream = number of buses x poll rate: each moving bus costs 2
-  requests/min, each stopped one 0.2/min. With 14 buses and about 3-4 moving at a
-  time that is roughly 8-10 requests/min (an estimate, not measured on the live
-  route); it scales with the list length and with how many buses are moving.
+- Active hours: with `ACTIVE_WINDOWS` set (default in `.env.example`: 06:00-10:30 and
+  16:00-20:30 IST) nothing is sent to the upstream outside those hours, and the page
+  says tracking is paused and shows the last known positions. Each time a window
+  opens, the first sample of every bus starts fresh instead of being compared with
+  positions from hours ago.
+- Load on the upstream = number of buses x poll rate x hours active. At the shipped
+  2-minute setting a moving bus costs 0.5 requests/min and a stopped one 0.2/min, so
+  14 buses with 3-4 moving is roughly 4 requests/min, only during the 8.5 active
+  hours a day: about 2,000 requests/day. For comparison, 30 s polling around the
+  clock would be about 14,000/day. These are estimates, not measured on the live route.
+
+**One shared client, on purpose.** Splitting the work into one script per bus, or
+making requests look like they come from different users (rotating device ids or
+IPs), would not lower the load, it would only hide it from the operator's abuse limits.
+So there is a single rate-limited client with one fixed `UPSTREAM_DEVICE_ID`, and the
+way to lower the load is fewer buses, longer intervals and shorter active hours.
 
 **Do not point this at a service you don't run without asking.** Measured against the
 third-party proxy: every polled plate (with or without `focus=1`) is added to its

@@ -35,6 +35,7 @@ export function loadConfig() {
       enabled: ['on', '1', 'true', 'yes'].includes(str('COLLECTOR', 'off').toLowerCase()),
       routeA: route('ROUTE_A', { id: '594', name: 'Bhuj', lat: 23.25017, lng: 69.6707 }),
       routeB: route('ROUTE_B', { id: '1082', name: 'Mundra', lat: 22.83904, lng: 69.72438 }),
+      windows: str('ACTIVE_WINDOWS', ''),
       plates: str('TRACK_PLATES', '').split(',').map((p) => p.trim()).filter(Boolean),
       dataDir: str('DATA_DIR', 'data'),
       pollActiveMs: num('POLL_ACTIVE_MS', 30_000),

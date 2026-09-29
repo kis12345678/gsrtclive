@@ -272,8 +272,10 @@ const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min
 function renderMundra(data) {
   lastMundra = data;
   const buses = data.buses || [];
-  $('#mundra-summary').textContent =
-    `${buses.length} shown · ${data.moving} moving · ${data.withData}/${data.tracked} bus positions known`;
+  const paused = data.active === false;
+  $('#mundra-summary').textContent = paused
+    ? `Tracking paused. Active ${data.windows} IST${data.nextWindowStart ? `, next start ${data.nextWindowStart}` : ''}. Showing last known positions.`
+    : `${buses.length} shown · ${data.moving} moving · ${data.withData}/${data.tracked} bus positions known`;
 
   layers.mundra.clearLayers();
   for (const b of buses) {
@@ -284,16 +286,18 @@ function renderMundra(data) {
       fillColor: b.moving ? '#16a34a' : '#6b7280',
       fillOpacity: 1,
     })
-      .bindTooltip(`${b.plate}${b.moving ? ` · ${Math.round(b.speedKmh)} km/h` : ' · stopped'}`)
+      .bindTooltip(`${b.plate}${b.moving ? ` · ${Math.round(b.speedKmh)} km/h` : paused ? ' · last position' : ' · stopped'}`)
       .on('click', () => selectBus(b))
       .addTo(layers.mundra);
   }
 
   $('#mundra-list').replaceChildren(
     ...buses.map((b) => {
-      const state = b.moving
-        ? `moving ~${Math.round(b.speedKmh)} km/h${b.towards ? ` → ${b.towards}` : ''}`
-        : `stopped${b.stillForMin >= 2 ? ` ${fmtMin(b.stillForMin)}` : ''}`;
+      const state = paused
+        ? `last seen ${fmtMin(Math.max(1, Math.round(b.ageSec / 60)))} ago`
+        : b.moving
+          ? `moving ~${Math.round(b.speedKmh)} km/h${b.towards ? ` → ${b.towards}` : ''}`
+          : `stopped${b.stillForMin >= 2 ? ` ${fmtMin(b.stillForMin)}` : ''}`;
       const li = el(
         'li',
         { className: `bus ${b.moving ? 'moving' : 'stopped'}${b.plate === selectedPlate ? ' selected' : ''}` },
