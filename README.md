@@ -55,7 +55,7 @@ With `COLLECTOR=on` the server keeps watching the Bhuj <-> Mundra route around t
 clock, whether or not anyone has the page open:
 
 ```
-timetable (both directions) ──► bus roster ──► poll each bus (30 s moving / 5 min stopped)
+TRACK_PLATES (or the timetable, both directions) ──► bus roster ──► poll each bus (30 s moving / 5 min stopped)
                                                   │
                           speed + direction worked out from consecutive positions
                                                   │
@@ -84,8 +84,15 @@ What the numbers mean, and don't:
   for buses in the corridor (`inCorridor`).
 - The upstream's location name (`CurrentLocationName`) is often wrong (a bus 5 km
   from Mundra reported "Rajkot"), so the UI doesn't show it.
-- Only buses the timetable lists for the route are tracked, so an unscheduled
-  replacement bus is missed until it shows up in the timetable.
+- Which buses: with `TRACK_PLATES` set (the default in `.env.example`) exactly those
+  buses are tracked and the timetable is never queried; leave it empty to follow
+  whatever the timetable lists each day. Either way an unlisted replacement bus is
+  missed, so revisit the list now and then. To add a bus: edit `TRACK_PLATES` in
+  `.env` and `docker compose up -d`.
+- Load on the upstream = number of buses x poll rate: each moving bus costs 2
+  requests/min, each stopped one 0.2/min. With 14 buses and about 3-4 moving at a
+  time that is roughly 8-10 requests/min (an estimate, not measured on the live
+  route); it scales with the list length and with how many buses are moving.
 
 **Do not point this at a service you don't run without asking.** Measured against the
 third-party proxy: every polled plate (with or without `focus=1`) is added to its
