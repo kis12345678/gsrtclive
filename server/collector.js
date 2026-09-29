@@ -53,6 +53,7 @@ export class Collector {
     upstream,
     routeA,
     routeB,
+    plates = [],
     dataDir = 'data',
     pollActiveMs = 30_000,
     pollIdleMs = 5 * 60_000,
@@ -71,6 +72,15 @@ export class Collector {
       upstream, routeA, routeB, dataDir, pollActiveMs, pollIdleMs, rosterRefreshMs, rosterKeepMs,
       retentionDays, maxPlates, corridorKm, heartbeatMs, tickMs, perTick, now, log,
     });
+    // Fixed mode: track exactly these buses and never ask the timetable who runs the route.
+    const wanted = [...new Set(plates.map(normPlate).filter(Boolean))];
+    if (plates.length && !wanted.length) throw new Error('TRACK_PLATES contains no valid bus numbers');
+    if (wanted.length < plates.length) {
+      log.warn?.(`TRACK_PLATES: ignored ${plates.length - wanted.length} invalid or duplicate entries`);
+    }
+    if (wanted.length > maxPlates) log.warn?.(`TRACK_PLATES: only the first ${maxPlates} of ${wanted.length} buses are tracked (MAX_PLATES)`);
+    this.fixed = wanted.slice(0, maxPlates);
+
     this.roster = new Map(); // plate -> last time the timetable listed it
     this.buses = new Map(); // plate -> live state
     this.rosterAt = 0;
@@ -126,6 +136,12 @@ export class Collector {
 
   async refreshRoster() {
     const t = this.now();
+    if (this.fixed.length) {
+      for (const plate of this.fixed) this.roster.set(plate, t);
+      this.rosterAt = t;
+      this.#syncBuses();
+      return;
+    }
     const day = istDay(t);
     let ok = 0;
     for (const [from, to] of [[this.routeA.id, this.routeB.id], [this.routeB.id, this.routeA.id]]) {
@@ -153,6 +169,10 @@ export class Collector {
       this.log.warn?.(`roster capped at ${this.maxPlates} buses (timetable listed ${this.roster.size})`);
       this.roster = new Map(keep);
     }
+    this.#syncBuses();
+  }
+
+  #syncBuses() {
     for (const plate of this.roster.keys()) {
       if (!this.buses.has(plate)) this.buses.set(plate, { plate, nextPollAt: 0, hasData: false });
     }
@@ -269,6 +289,7 @@ export class Collector {
     return {
       running: Boolean(this.timer),
       route: `${this.routeA.name} <-> ${this.routeB.name}`,
+      mode: this.fixed.length ? 'fixed' : 'timetable',
       uptimeSec: Math.round((t - this.stats.startedAt) / 1000),
       roster: this.roster.size,
       rosterAgeSec: this.rosterAt ? Math.round((t - this.rosterAt) / 1000) : null,

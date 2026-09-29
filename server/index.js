@@ -33,7 +33,8 @@ server.listen(config.port, () => {
   console.log(`gsrtclive listening on http://localhost:${config.port} (upstream ${config.upstreamBase})`);
   if (collector) {
     const { routeA, routeB } = config.collector;
-    console.log(`collector on: ${routeA.name} <-> ${routeB.name}, history in ${config.collector.dataDir}/`);
+    const which = config.collector.plates.length ? `${config.collector.plates.length} fixed buses (TRACK_PLATES)` : 'buses from the timetable';
+    console.log(`collector on: ${routeA.name} <-> ${routeB.name}, ${which}, history in ${config.collector.dataDir}/`);
   } else {
     console.log('collector off (set COLLECTOR=on for 24x7 route tracking, see README)');
   }

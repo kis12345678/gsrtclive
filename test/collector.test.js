@@ -279,3 +279,31 @@ test('HTTP: /api/mundra/* served from the collector, with validation', async () 
     await cleanup();
   }
 });
+
+test('fixed mode (TRACK_PLATES): only the listed buses, no timetable queries', async () => {
+  const up = fake({ timetable: { '594>1082': [{ BusNo: 'GJ18Z9999' }] } }); // must be ignored
+  up.vehicles.GJ18Z3021 = [23.2, 69.66];
+  up.vehicles.GJ18ZT2141 = [23.1, 69.7];
+  up.vehicles.GJ18Z9999 = [23.0, 69.7];
+  const { c, cleanup } = await setup(up, { plates: ['GJ-18-Z-3021', 'gj18zt2141', 'GJ18Z3021', 'bad!', ''] });
+
+  await c.refreshRoster();
+  await c.tick();
+  assert.deepEqual([...c.roster.keys()].sort(), ['GJ18Z3021', 'GJ18ZT2141']); // normalised, de-duplicated
+  assert.equal(up.calls.filter((x) => x.path === '/api/timetable').length, 0);
+  assert.deepEqual(up.calls.map((x) => x.path).sort(), ['/api/vehicle/GJ18Z3021', '/api/vehicle/GJ18ZT2141']);
+  assert.equal(c.status().mode, 'fixed');
+  assert.equal(c.snapshot().tracked, 2);
+  await cleanup();
+});
+
+test('fixed mode: fails loudly when no plate is valid, and the cap still applies', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'gsrtc-'));
+  const mk = (plates, extra = {}) => new Collector({ upstream: fake(), routeA: A, routeB: B, dataDir, log: silent, plates, ...extra });
+  assert.throws(() => mk(['x', '!!']), /no valid bus numbers/);
+  const capped = mk(['GJ18Z1001', 'GJ18Z1002', 'GJ18Z1003'], { maxPlates: 2 });
+  await capped.refreshRoster();
+  assert.deepEqual([...capped.roster.keys()], ['GJ18Z1001', 'GJ18Z1002']); // first two, in the order given
+  assert.equal(mk([]).status().mode, 'timetable');
+  await rm(dataDir, { recursive: true, force: true });
+});
