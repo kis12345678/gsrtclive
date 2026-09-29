@@ -1,8 +1,9 @@
 # Third-party tracker proxy — API reference
 
-> **Reference only. Do not build on this.** This is someone else's small,
-> single-developer proxy. Our project should talk to the official upstream
-> directly (see "Upstream" below).
+> **Stop-gap upstream.** This is someone else's small, single-developer proxy. It
+> is the configured upstream for now (`.env.example`), behind our rate-limited
+> client, but the plan is to talk to the official upstream directly (see "Upstream"
+> below). Do not expose it to browsers from our pages, and keep the request rate low.
 
 - Base: `https://tracker.shivrajsinh.in`
 - Dev instance: `https://dev-tracker.shivrajsinh.in`
@@ -42,7 +43,7 @@
 | GET | `/api/timetable?from=&to=&date=&type=&page=&pageSize=` | |
 | GET | `/api/servicetypes` | |
 | GET | `/api/nearby?lat=&lng=` | nearby stations |
-| GET | `/api/stations/{id}` | |
+| GET | `/api/stations/{query}` | station **name search** (`/api/stations/Bhuj` → list with `StationId`, `lat`, `lng`) |
 | GET | `/api/station/parent?id=&name=` | |
 | GET | `/api/stops?ids=1,2,3` | |
 | GET | `/api/stops?south=&west=&north=&east=` | bounding box |
@@ -77,3 +78,19 @@ curl "https://tracker.shivrajsinh.in/api/nearby?lat=23.25&lng=69.67"
 
 Field names such as `StationId` / `StationName` look passed through from the
 upstream, which is useful when mapping the infinium API from the APK.
+
+## Verified response shapes (smoke-tested 2026-09-29)
+
+| Endpoint | Shape |
+|---|---|
+| `/api/vehicle/{plate}` | `{ vehicle: { VehicleNo, Status, RouteName, LastBusStation, NextLocation, ETA, Latitude, Longitude, DepartureDateTime, CurrentLocationName, TripId, Speed }, track: { fixes: [{lat,lng,at}], trail, speedKmh, movement, updatedAt, ... } }`. Plate works with or without dashes. |
+| `/api/live` | `{ buses: [{ plate, tripId, route, nextStop, lat, lng, speedKmh, movement, updatedAt }], running }` |
+| `/api/nearby` | `[{ StationId, StationName, Center_Lat, Center_Lon, Distance }]` |
+| `/api/nearby/buses` | `[{ plate, lat, lng, distanceKm, routeName, lastStation, nextStation, status }]` (slow, up to ~8 s) |
+| `/api/plates?q=` | `[{ plate, depot, division }]` |
+| `/api/stops?south&west&north&east` | `[{ id, name, nameGu, lat, lng }]` |
+| `/api/geometry/eta` | `{ distanceKm, durationMinutes, source }` |
+
+Not wired into our routes on purpose: `/api/conductor` (returns a person's mobile
+number), `/api/ticket` and `/api/pickup-points` (passenger data), and all `POST`
+endpoints (they write to the third party's database).

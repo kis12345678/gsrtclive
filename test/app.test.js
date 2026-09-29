@@ -69,3 +69,81 @@ test('serves the frontend and blocks path traversal', async () => {
     assert.notEqual((await fetch(`${base}/..%2Fpackage.json`)).status, 200);
   });
 });
+
+test('stations route is a name search: spaces and brackets pass, junk and bad encoding do not', async () => {
+  const upstream = fakeUpstream();
+  await withServer(createHandler({ upstream, limiter: new ClientLimiter(100) }), async (base) => {
+    assert.equal((await fetch(`${base}/api/stations/Mundra%20port`)).status, 200);
+    assert.equal(upstream.calls[0].path, '/api/stations/Mundra%20port');
+    assert.equal((await fetch(`${base}/api/stations/Toda(Mundra)`)).status, 200);
+
+    assert.equal((await fetch(`${base}/api/stations/a`)).status, 400); // too short
+    assert.equal((await fetch(`${base}/api/stations/..%2Fhealth`)).status, 400);
+    assert.equal((await fetch(`${base}/api/stations/%E0%A4%A`)).status, 400); // malformed %-escape
+    assert.equal(upstream.calls.length, 2);
+  });
+});
+
+test('stops: ids list and snapped bounding box, oversized areas rejected', async () => {
+  const upstream = fakeUpstream();
+  await withServer(createHandler({ upstream, limiter: new ClientLimiter(100) }), async (base) => {
+    assert.equal((await fetch(`${base}/api/stops?ids=594,1082`)).status, 200);
+    assert.deepEqual(upstream.calls[0].query, { ids: '594,1082' });
+
+    assert.equal((await fetch(`${base}/api/stops?south=23.2011&west=69.6234&north=23.3021&east=69.7212`)).status, 200);
+    assert.deepEqual(upstream.calls[1].query, { south: '23.20', west: '69.62', north: '23.31', east: '69.73' });
+
+    assert.equal((await fetch(`${base}/api/stops?south=20&west=68&north=24&east=72`)).status, 400);
+    assert.equal((await fetch(`${base}/api/stops?south=23.3&west=69&north=23.2&east=70`)).status, 400);
+    assert.equal((await fetch(`${base}/api/stops?ids=a%2Fb`)).status, 400);
+    assert.equal((await fetch(`${base}/api/stops`)).status, 400);
+    assert.equal(upstream.calls.length, 2);
+  });
+});
+
+test('crowd: normalizes, de-duplicates and caps plates', async () => {
+  const upstream = fakeUpstream();
+  await withServer(createHandler({ upstream, limiter: new ClientLimiter(100) }), async (base) => {
+    assert.equal((await fetch(`${base}/api/crowd?plates=GJ-18-Z-6224,gj18z6224,GJ18Z0001`)).status, 200);
+    assert.deepEqual(upstream.calls[0].query, { plates: 'GJ18Z0001,GJ18Z6224' });
+
+    const many = Array.from({ length: 11 }, (_, i) => `GJ18Z${1000 + i}`).join(',');
+    assert.equal((await fetch(`${base}/api/crowd?plates=${many}`)).status, 400);
+    assert.equal((await fetch(`${base}/api/crowd?plates=`)).status, 400);
+    assert.equal((await fetch(`${base}/api/crowd?plates=x`)).status, 400);
+  });
+});
+
+test('geometry/eta, eta/segments and station/parent map onto the upstream', async () => {
+  const upstream = fakeUpstream();
+  await withServer(createHandler({ upstream, limiter: new ClientLimiter(100) }), async (base) => {
+    assert.equal((await fetch(`${base}/api/geometry/eta?fromLat=23.250171&fromLng=69.6707&toLat=23.0715&toLng=70.1461`)).status, 200);
+    assert.deepEqual(upstream.calls[0].query, { fromLat: '23.2502', fromLng: '69.6707', toLat: '23.0715', toLng: '70.1461' });
+    assert.equal((await fetch(`${base}/api/geometry/eta?fromLat=x&fromLng=1&toLat=2&toLng=3`)).status, 400);
+
+    assert.equal((await fetch(`${base}/api/eta/segments?route=3291`)).status, 200);
+    assert.deepEqual(upstream.calls[1], { path: '/api/eta/segments', query: { route: '3291' }, opts: { ttlMs: 600000 } });
+    assert.equal((await fetch(`${base}/api/eta/segments`)).status, 400);
+
+    assert.equal((await fetch(`${base}/api/station/parent?id=594&name=Bhuj&junk=1`)).status, 200);
+    assert.deepEqual(upstream.calls[2].query, { id: '594', name: 'Bhuj' });
+    assert.equal((await fetch(`${base}/api/station/parent`)).status, 400);
+  });
+});
+
+test('trip, timetable, depot and nearby/buses pass their extra params', async () => {
+  const upstream = fakeUpstream();
+  await withServer(createHandler({ upstream, limiter: new ClientLimiter(100) }), async (base) => {
+    await fetch(`${base}/api/trip?tripId=1&status=1&plate=GJ18Z6224&route=3291&junk=x`);
+    assert.deepEqual(upstream.calls[0].query, { tripId: '1', status: '1', plate: 'GJ18Z6224', route: '3291' });
+
+    await fetch(`${base}/api/timetable?from=594&to=1082&combine=1&fromName=Bhuj&junk=x`);
+    assert.deepEqual(upstream.calls[1].query, { from: '594', to: '1082', fromName: 'Bhuj', combine: '1' });
+
+    await fetch(`${base}/api/depot/departures?depotId=594&date=2026-09-29&page=2&pageSize=50`);
+    assert.deepEqual(upstream.calls[2].query, { depotId: '594', date: '2026-09-29', page: '2', pageSize: '50' });
+
+    await fetch(`${base}/api/nearby/buses?lat=23.25017&lng=69.6707&radius=500`);
+    assert.deepEqual(upstream.calls[3].query, { lat: '23.250', lng: '69.671', radius: 50 });
+  });
+});

@@ -149,6 +149,9 @@ function renderVehicle(plate, data, fit) {
     ['Route', field(vehicle, 'routeName', 'route', 'RouteName')],
     ['From', field(vehicle, 'from', 'fromStation', 'FromStationName')],
     ['To', field(vehicle, 'to', 'toStation', 'ToStationName')],
+    ['Location', field(vehicle, 'CurrentLocationName')],
+    ['Last stop', field(vehicle, 'LastBusStation')],
+    ['Next stop', field(vehicle, 'NextLocation')],
     ['Speed', field(vehicle, 'speed', 'Speed')],
     ['Last seen', field(vehicle, 'time', 'timestamp', 'lastUpdated', 'gpsTime', 'DateTime')],
   ].filter(([, v]) => v !== undefined && typeof v !== 'object');
