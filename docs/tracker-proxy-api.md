@@ -94,3 +94,13 @@ upstream, which is useful when mapping the infinium API from the APK.
 Not wired into our routes on purpose: `/api/conductor` (returns a person's mobile
 number), `/api/ticket` and `/api/pickup-points` (passenger data), and all `POST`
 endpoints (they write to the third party's database).
+
+## Load this puts on the third party (measured 2026-09-29)
+
+- `/api/health` -> `tracker.watching` (max `maxPlates` = 60) counts plates the service
+  is actively polling against GSRTC. Requesting `/api/vehicle/{plate}` adds the plate to
+  it, **with or without `focus=1`**; entries expire after some minutes of no requests.
+- Polling 14 plates for under two minutes moved `watching` from 19 to 35, while
+  `tracker.backingOff` was `true`.
+- So sustained polling of many plates directly consumes the operator's capacity and
+  GSRTC goodwill. Ask before running the 24x7 collector against it.

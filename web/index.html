@@ -11,14 +11,21 @@
   <header>
     <h1>GSRTC Live</h1>
     <nav role="tablist">
-      <button role="tab" data-tab="track" aria-selected="true">Track bus</button>
+      <button role="tab" data-tab="mundra" aria-selected="true">Mundra route</button>
+      <button role="tab" data-tab="track" aria-selected="false">Track bus</button>
       <button role="tab" data-tab="nearby" aria-selected="false">Nearby stations</button>
     </nav>
   </header>
 
   <main>
     <section id="panel">
-      <div data-panel="track">
+      <div data-panel="mundra">
+        <p id="mundra-summary" class="muted">Loading…</p>
+        <label class="check"><input type="checkbox" id="corridor" checked> Only buses on the Bhuj–Mundra road</label>
+        <ul id="mundra-list" class="list"></ul>
+      </div>
+
+      <div data-panel="track" hidden>
         <form id="plate-form" autocomplete="off">
           <label for="plate">Bus number</label>
           <div class="row">

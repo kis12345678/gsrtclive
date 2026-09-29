@@ -115,6 +115,15 @@ dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px
 dt { color: var(--muted); }
 dd { margin: 0; word-break: break-word; }
 
+/* Mundra route tab */
+.muted { color: var(--muted); margin: 0 0 8px; }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; }
+.check input { flex: none; }
+.list li.bus { display: grid; gap: 2px; }
+.list li.bus.moving { border-left: 4px solid #16a34a; }
+.list li.bus.stopped { border-left: 4px solid #9ca3af; }
+.list li.bus.selected { background: var(--bg); outline: 2px solid var(--accent); }
+
 @media (max-width: 720px) {
   main { flex-direction: column; }
   #panel { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45vh; }

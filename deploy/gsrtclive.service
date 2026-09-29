@@ -1,0 +1,25 @@
+# Example systemd unit for running the tracker 24x7.
+#   sudo cp deploy/gsrtclive.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now gsrtclive
+# Adjust the paths and user. Settings come from /opt/gsrtclive/.env.
+[Unit]
+Description=GSRTC Live (Mundra route tracker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsrtclive
+WorkingDirectory=/opt/gsrtclive
+EnvironmentFile=/opt/gsrtclive/.env
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+# SIGTERM lets the server flush queued history lines before it exits.
+TimeoutStopSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/gsrtclive/data
+
+[Install]
+WantedBy=multi-user.target
