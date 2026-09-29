@@ -1,9 +1,11 @@
 // Our public API (/api/...) and how each route maps onto the upstream.
 //
-// The upstream paths below mirror the third-party proxy (docs/tracker-proxy-api.md)
-// and are NOT yet verified against the infinium upstream. When mapping the real
-// upstream from the APK, change only `upstream` (path + query) per route; the
-// frontend depends on our paths, not the upstream's.
+// The upstream paths below mirror the third-party proxy (docs/tracker-proxy-api.md),
+// which is the configured upstream for now (see .env.example) and was smoke-tested
+// against https://tracker.shivrajsinh.in. They are NOT verified against the official
+// infinium upstream. When mapping the real upstream from the APK, change only
+// `upstream` (path + query) per route; the frontend depends on our paths, not the
+// upstream's.
 //
 // `ttlMs` is how long a response is cached server-side. Live positions are
 // cached briefly so many viewers of one bus cost one upstream call.
@@ -13,6 +15,17 @@ const MIN = 60 * SEC;
 
 const PLATE = /^[A-Z0-9]{4,12}$/;
 const ID = /^[A-Za-z0-9_-]{1,40}$/;
+// Station search text ("Bhuj", "Mundra port", "Toda(Mundra)"), Gujarati letters allowed.
+const STATION_Q = /^[\p{L}\p{N} ()._-]{2,40}$/u;
+
+// decodeURIComponent throws on malformed input; turn that into a 400, not a 500.
+function decode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    throw new RouteError('Bad URL encoding');
+  }
+}
 
 function pick(q, keys) {
   const out = {};
@@ -41,7 +54,7 @@ export const routes = [
     path: /^\/api\/vehicle\/([^/]+)$/,
     ttlMs: 10 * SEC,
     upstream([plate], q) {
-      plate = decodeURIComponent(plate).toUpperCase().replace(/[\s-]/g, '');
+      plate = decode(plate).toUpperCase().replace(/[\s-]/g, '');
       if (!PLATE.test(plate)) throw new RouteError('Invalid plate');
       return [`/api/vehicle/${plate}`, pick(q, ['date', 'focus', 'tripId', 'start'])];
     },
@@ -59,7 +72,10 @@ export const routes = [
     ttlMs: 15 * SEC,
     upstream(_, q) {
       requireCoords(q, ['lat', 'lng']);
-      return ['/api/nearby/buses', roundCoords(pick(q, ['lat', 'lng']), 3)];
+      const query = roundCoords(pick(q, ['lat', 'lng']), 3);
+      const radius = Number(q.get('radius'));
+      if (Number.isFinite(radius) && radius > 0) query.radius = Math.min(radius, 50);
+      return ['/api/nearby/buses', query];
     },
   },
   {
@@ -67,7 +83,7 @@ export const routes = [
     ttlMs: 30 * SEC,
     upstream(_, q) {
       requireAll(q, ['tripId']);
-      return ['/api/trip', pick(q, ['tripId', 'status', 'start'])];
+      return ['/api/trip', pick(q, ['tripId', 'status', 'start', 'plate', 'route'])];
     },
   },
   {
@@ -91,7 +107,7 @@ export const routes = [
     path: /^\/api\/tripcode\/([^/]+)$/,
     ttlMs: 5 * MIN,
     upstream([code]) {
-      code = decodeURIComponent(code);
+      code = decode(code);
       if (!ID.test(code)) throw new RouteError('Invalid trip code');
       return [`/api/tripcode/${code}`, {}];
     },
@@ -103,7 +119,7 @@ export const routes = [
     ttlMs: 10 * MIN,
     upstream(_, q) {
       requireAll(q, ['from', 'to']);
-      return ['/api/timetable', pick(q, ['from', 'to', 'date', 'type', 'page', 'pageSize'])];
+      return ['/api/timetable', pick(q, ['from', 'to', 'date', 'type', 'page', 'pageSize', 'fromName', 'toName', 'combine'])];
     },
   },
   {
@@ -123,10 +139,11 @@ export const routes = [
   {
     path: /^\/api\/stations\/([^/]+)$/,
     ttlMs: 60 * MIN,
-    upstream([id]) {
-      id = decodeURIComponent(id);
-      if (!ID.test(id)) throw new RouteError('Invalid station id');
-      return [`/api/stations/${id}`, {}];
+    // Upstream treats the last segment as a search term (name), not an id.
+    upstream([term]) {
+      term = decode(term).trim();
+      if (!STATION_Q.test(term)) throw new RouteError('Invalid station search');
+      return [`/api/stations/${encodeURIComponent(term)}`, {}];
     },
   },
   {
@@ -134,7 +151,69 @@ export const routes = [
     ttlMs: 60 * SEC,
     upstream(_, q) {
       requireAll(q, ['depotId']);
-      return ['/api/depot/departures', pick(q, ['depotId'])];
+      return ['/api/depot/departures', pick(q, ['depotId', 'date', 'page', 'pageSize'])];
+    },
+  },
+
+  // ---- Map / ETA / stops ----
+  {
+    path: /^\/api\/geometry\/eta$/,
+    ttlMs: 5 * MIN,
+    upstream(_, q) {
+      requireCoords(q, ['fromLat', 'fromLng', 'toLat', 'toLng']);
+      const out = {};
+      for (const k of ['fromLat', 'fromLng', 'toLat', 'toLng']) out[k] = Number(q.get(k)).toFixed(4);
+      return ['/api/geometry/eta', out];
+    },
+  },
+  {
+    path: /^\/api\/eta\/segments$/,
+    ttlMs: 10 * MIN,
+    upstream(_, q) {
+      requireAll(q, ['route']);
+      if (!ID.test(q.get('route'))) throw new RouteError('Invalid route');
+      return ['/api/eta/segments', { route: q.get('route') }];
+    },
+  },
+  {
+    path: /^\/api\/crowd$/,
+    ttlMs: 30 * SEC,
+    upstream(_, q) {
+      const plates = (q.get('plates') || '')
+        .split(',')
+        .map((p) => p.toUpperCase().replace(/[\s-]/g, ''))
+        .filter(Boolean);
+      if (!plates.length || plates.length > 10 || !plates.every((p) => PLATE.test(p))) {
+        throw new RouteError('plates must be 1-10 valid bus numbers, comma separated');
+      }
+      return ['/api/crowd', { plates: [...new Set(plates)].sort().join(',') }];
+    },
+  },
+  {
+    path: /^\/api\/stops$/,
+    ttlMs: 60 * MIN,
+    upstream(_, q) {
+      if (q.has('ids')) {
+        const ids = q.get('ids').split(',').map((s) => s.trim()).filter(Boolean);
+        if (!ids.length || ids.length > 50 || !ids.every((i) => ID.test(i))) throw new RouteError('Invalid ids');
+        return ['/api/stops', { ids: ids.join(',') }];
+      }
+      requireCoords(q, ['south', 'west', 'north', 'east']);
+      const [south, west, north, east] = ['south', 'west', 'north', 'east'].map((k) => Number(q.get(k)));
+      if (north <= south || east <= west) throw new RouteError('Invalid bounding box');
+      if (north - south > 2 || east - west > 2) throw new RouteError('Area too large (max 2 degrees)');
+      // Snap outwards to a ~1 km grid so nearby map views share a cache entry.
+      const f = (n, fn) => (fn(n * 100) / 100).toFixed(2);
+      return ['/api/stops', { south: f(south, Math.floor), west: f(west, Math.floor), north: f(north, Math.ceil), east: f(east, Math.ceil) }];
+    },
+  },
+  {
+    path: /^\/api\/station\/parent$/,
+    ttlMs: 60 * MIN,
+    upstream(_, q) {
+      if (!q.get('id') && !q.get('name')) throw new RouteError('Missing query parameter: id or name');
+      if (q.get('id') && !ID.test(q.get('id'))) throw new RouteError('Invalid station id');
+      return ['/api/station/parent', pick(q, ['id', 'name', 'exclude'])];
     },
   },
 
@@ -143,7 +222,7 @@ export const routes = [
     path: /^\/api\/pnr\/([^/]+)$/,
     ttlMs: 60 * SEC,
     upstream([pnr]) {
-      pnr = decodeURIComponent(pnr);
+      pnr = decode(pnr);
       if (!ID.test(pnr)) throw new RouteError('Invalid PNR');
       return [`/api/pnr/${pnr}`, {}];
     },

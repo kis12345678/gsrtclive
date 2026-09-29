@@ -26,19 +26,28 @@ npm start              # http://localhost:8080
 npm test
 ```
 
-## Upstream mapping: still to do
+## Upstream
 
-`server/routes.js` defines our `/api/*` routes, and says how each one maps to
-an upstream path and which query parameters it passes on. Those upstream paths
-currently copy the third-party proxy (see `docs/tracker-proxy-api.md`). They
-have **not** been checked against the official infinium upstream.
+`.env.example` points `UPSTREAM_BASE` at the third-party tracker proxy
+(`https://tracker.shivrajsinh.in`, see `docs/tracker-proxy-api.md`). Every route in
+`server/routes.js` was smoke-tested against it. It is a stop-gap: a small
+single-developer service with no SLA that blocks clients that hammer it, so the
+outbound budget in `.env.example` is deliberately low (1 req/s, burst 2).
 
-After the real endpoints are mapped from the APK, edit each route's `upstream()`
-function. If the response shape differs, reshape it there too. The frontend
-only depends on our routes.
+Still to do: map the official infinium upstream from the APK and switch
+`UPSTREAM_BASE`. Change only each route's `upstream()` function (and reshape the
+response there if it differs); the frontend depends on our routes only.
 
-The frontend reads fields leniently (`lat`/`Lat`/`latitude`, and so on) because
-the response shapes are not pinned down yet.
+The frontend reads fields leniently (`lat`/`Lat`/`latitude`, and so on), so it works
+with either upstream.
+
+## Upstream data caveats
+
+Observed with the third-party upstream, and likely inherited from GSRTC's own data:
+`Status` is almost always "Running", `Speed`/`speedKmh` is mostly missing, and trip
+labels ("next stop", ETA) can belong to an earlier or later trip. Only the GPS
+position is dependable. To tell whether a bus is really moving, compare two
+positions a minute apart.
 
 ## Layout
 
